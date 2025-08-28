@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ADHD-mon GIF Maker</title>
+<style>
+  :root {
+    --bg: #0b0c10;
+    --ink: #111;
+    --ui: #1f2833;
+    --accent: #ffd400;
+  }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    background: radial-gradient(1200px 800px at 40% 50%, #162029, #0b0c10);
+    color: #e8eef2;
+    display: grid;
+    place-items: center;
+    padding: 28px 16px;
+  }
+  .card {
+    width: min(1100px, 95vw);
+    background: linear-gradient(#1a232c, #12171d);
+    border: 1px solid #2a3745;
+    border-radius: 18px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.35);
+    padding: 18px 18px 12px;
+  }
+  .row { display: grid; grid-template-columns: 1fr 380px; gap: 18px; align-items: start; }
+  .stack { display: grid; gap: 12px; }
+  canvas, .preview {
+    width: 100%;
+    background: #000;
+    border-radius: 12px;
+    border: 1px solid #2b3643;
+    aspect-ratio: 1365 / 768; /* fallback size before image loads */
+    display: block;
+  }
+  .panel {
+    background: #12171d;
+    border: 1px solid #2b3643;
+    border-radius: 12px;
+    padding: 14px;
+  }
+  .controls { display: grid; gap: 10px; }
+  label { font-size: 14px; opacity: .9; }
+  input[type="file"] {
+    width: 100%;
+    padding: 10px;
+    border: 1px dashed #3b4a5e;
+    border-radius: 10px;
+    background: #0f141a;
+    color: #cfe3ff;
+  }
+  input[type="range"] { width: 100%; }
+  .btn {
+    appearance: none; border: 0; cursor: pointer;
+    padding: 10px 14px; border-radius: 10px;
+    background: #24435f; color: #fff; font-weight: 700;
+  }
+  .btn[disabled] { opacity: .5; cursor: not-allowed; }
+  .hint { font-size: 12px; opacity: .7; }
+  .out { display: grid; gap: 10px; }
+  .gif { width: 100%; border-radius: 10px; border: 1px solid #2b3643; background: #000; display:block; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="row">
+      <div class="stack">
+        <canvas id="stage" class="preview"></canvas>
+      </div>
+      <div class="panel">
+        <div class="controls">
+          <label>Upload your PNG (transparent recommended)
+            <input id="file" type="file" accept="image/png,image/webp,image/jpeg" />
+          </label>
+
+          <div>
+            <label>Silhouette duration: <span id="silv">1.6</span>s</label>
+            <input id="sil" type="range" min="0.5" max="3.0" step="0.1" value="1.6" />
+          </div>
+
+          <div>
+            <label>Reveal fade time: <span id="fdv">0.6</span>s</label>
+            <input id="fade" type="range" min="0.2" max="2.0" step="0.1" value="0.6" />
+          </div>
+
+          <div>
+            <label>Hold time after reveal: <span id="holdv">1.2</span>s</label>
+            <input id="hold" type="range" min="0.5" max="3.0" step="0.1" value="1.2" />
+          </div>
+
+          <div>
+            <label>GIF FPS: <span id="fpsv">10</span></label>
+            <input id="fps" type="range" min="6" max="20" step="1" value="10" />
+          </div>
+
+          <button id="make" class="btn" disabled>Generate GIF</button>
+          <div class="hint">The PNG is placed **center-left** and scaled to fit the burst. You can tweak timings, then “Generate GIF”.</div>
+          <div class="out" id="out"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- gif.js for client-side GIF encoding -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.js" integrity="sha512-2V9GgC8aY/0FJpE3OQfjVdYh5Z0Xg1NDkI1g5bC2iE0wqXhZ2QfYHqCq7XwiwTgVtC7+3v4tH2k0KxwSqp9twA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script>
+  (function () {
+    const bgSrc = "adhdmon-template.png"; // Place this file next to the HTML
+    const bg = new Image();
+    bg.src = bgSrc;
+    bg.decode?.().catch(()=>{}); // hint decoding where supported
+
+    const fileInput = document.getElementById('file');
+    const makeBtn   = document.getElementById('make');
+    const out       = document.getElementById('out');
+
+    const sil  = document.getElementById('sil');
+    const fade = document.getElementById('fade');
+    const hold = document.getElementById('hold');
+    const fps  = document.getElementById('fps');
+
+    const silv  = document.getElementById('silv');
+    const fdv   = document.getElementById('fdv');
+    const holdv = document.getElementById('holdv');
+    const fpsv  = document.getElementById('fpsv');
+
+    [sil, fade, hold, fps].forEach(el => el.addEventListener('input', () => {
+      silv.textContent  = (+sil.value).toFixed(1);
+      fdv.textContent   = (+fade.value).toFixed(1);
+      holdv.textContent = (+hold.value).toFixed(1);
+      fpsv.textContent  = (+fps.value|0);
+    }));
+    sil.dispatchEvent(new Event('input'));
+
+    const stage = document.getElementById('stage');
+    const ctx = stage.getContext('2d');
+
+    // Keep canvas matched to the background image size
+    bg.onload = () => {
+      stage.width  = bg.naturalWidth  || 1365;
+      stage.height = bg.naturalHeight || 768;
+      drawPlaceholder();
+    };
+
+    function drawPlaceholder() {
+      ctx.fillStyle = "#000";
+      ctx.fillRect(0,0,stage.width,stage.height);
+      if (bg.complete) ctx.drawImage(bg, 0, 0, stage.width, stage.height);
+    }
+
+    // Helper: contain-fit into a max box while preserving aspect
+    function fitContain(srcW, srcH, maxW, maxH) {
+      const r = Math.min(maxW / srcW, maxH / srcH);
+      return { w: Math.round(srcW * r), h: Math.round(srcH * r) };
+    }
+
+    // Compute target placement rect for the upload (center-left region)
+    function placementRect(img) {
+      const W = stage.width, H = stage.height;
+      // A generous box that covers the bright burst area
+      const maxBoxW = Math.round(W * 0.50); // left half
+      const maxBoxH = Math.round(H * 0.70);
+      const size = fitContain(img.naturalWidth, img.naturalHeight, maxBoxW, maxBoxH);
+      const cx = Math.round(W * 0.33), cy = Math.round(H * 0.50); // center-left
+      const x = Math.round(cx - size.w / 2), y = Math.round(cy - size.h / 2);
+      return { x, y, w: size.w, h: size.h };
+    }
+
+    let uploaded = null;
+
+    fileInput.addEventListener('change', async (e) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      // Load the uploaded image
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.src = url;
+      await img.decode().catch(()=>{}); // best-effort
+
+      uploaded = img;
+      makeBtn.disabled = false;
+
+      // Auto-generate immediately as requested
+      generateGIF().catch(err => alert(err?.message || err));
+
+      // Draw preview (silhouette first frame look)
+      renderFrame(0, 0); // silhouette preview
+    });
+
+    makeBtn.addEventListener('click', () => generateGIF().catch(err => alert(err?.message || err)));
+
+    // Renders a single frame to the stage:
+    // t in [0,1] across the fade; preHold=0 keeps silhouette, postHold=1 keeps full image
+    function renderFrame(phase, opacity) {
+      // phase: 0=silhouette, (0,1)=fade, 1=full image
+      ctx.clearRect(0,0,stage.width, stage.height);
+      ctx.drawImage(bg, 0, 0, stage.width, stage.height);
+
+      if (!uploaded) return;
+
+      const rect = placementRect(uploaded);
+
+      // Draw to a temp canvas to build silhouette
+      const tmp = document.createElement('canvas');
+      tmp.width = rect.w; tmp.height = rect.h;
+      const tctx = tmp.getContext('2d');
+
+      // Draw the original
+      tctx.drawImage(uploaded, 0, 0, rect.w, rect.h);
+
+      if (phase === 0 || phase < 1) {
+        // Build a black silhouette
+        tctx.globalCompositeOperation = 'source-in';
+        tctx.fillStyle = '#000';
+        tctx.fillRect(0, 0, rect.w, rect.h);
+        tctx.globalCompositeOperation = 'source-over';
+      }
+
+      if (phase === 0) {
+        // 100% silhouette
+        ctx.drawImage(tmp, rect.x, rect.y);
+      } else if (phase === 1 && (opacity === undefined || opacity >= 1)) {
+        // 100% full image
+        ctx.drawImage(uploaded, rect.x, rect.y, rect.w, rect.h);
+      } else {
+        // Crossfade: silhouette underneath, original above with tweened alpha
+        ctx.drawImage(tmp, rect.x, rect.y);
+        ctx.save();
+        ctx.globalAlpha = opacity;
+        ctx.drawImage(uploaded, rect.x, rect.y, rect.w, rect.h);
+        ctx.restore();
+      }
+    }
+
+    async function generateGIF() {
+      if (!uploaded || !bg.complete) return;
+
+      makeBtn.disabled = true;
+      out.innerHTML = `<div class="hint">Rendering GIF… this may take a few seconds.</div>`;
+
+      const FPS = parseInt(fps.value, 10);
+      const silSec  = parseFloat(sil.value);
+      const fadeSec = parseFloat(fade.value);
+      const holdSec = parseFloat(hold.value);
+
+      const silFrames  = Math.max(1, Math.round(silSec * FPS));
+      const fadeFrames = Math.max(1, Math.round(fadeSec * FPS));
+      const holdFrames = Math.max(1, Math.round(holdSec * FPS));
+
+      const gif = new GIF({
+        workers: 2,
+        quality: 10,
+        workerScript: "https://cdnjs.cloudflare.com/ajax/libs/gif.js/0.2.0/gif.worker.js",
+        width: stage.width,
+        height: stage.height,
+        transparent: null // opaque GIF for vivid colors
+      });
+
+      // Add silhouette frames
+      for (let i = 0; i < silFrames; i++) {
+        renderFrame(0, 0);
+        gif.addFrame(stage, { copy: true, delay: 1000 / FPS });
+      }
+
+      // Add fade frames (crossfade from silhouette to real)
+      for (let i = 0; i < fadeFrames; i++) {
+        const alpha = (i + 1) / fadeFrames;
+        renderFrame(0.5, alpha); // phase 0.5 indicates mixing
+        gif.addFrame(stage, { copy: true, delay: 1000 / FPS });
+      }
+
+      // Add hold frames (fully revealed)
+      for (let i = 0; i < holdFrames; i++) {
+        renderFrame(1, 1);
+        gif.addFrame(stage, { copy: true, delay: 1000 / FPS });
+      }
+
+      gif.on('finished', (blob) => {
+        const url = URL.createObjectURL(blob);
+        const img = new Image();
+        img.className = "gif";
+        img.src = url;
+
+        const a = document.createElement('a');
+        a.className = "btn";
+        a.download = "adhdmon.gif";
+        a.href = url;
+        a.textContent = "Download GIF";
+
+        out.innerHTML = "";
+        out.appendChild(img);
+        out.appendChild(a);
+        makeBtn.disabled = false;
+      });
+
+      gif.render();
+    }
+  })();
+  </script>
+</body>
+</html>
